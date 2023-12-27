@@ -7,7 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly-2023-12-26
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: "miri"
+          toolchain: nightly-2023-12-26
+          components: miri
       - run: cargo miri test --all-features
