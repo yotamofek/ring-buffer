@@ -1,0 +1,13 @@
+name: Test
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: cargo miri test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly-2023-12-26
+        with:
+          components: "miri"
+      - run: cargo miri test --all-features
