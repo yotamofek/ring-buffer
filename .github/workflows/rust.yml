@@ -10,6 +10,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2023-12-26
-          components: miri
+          components: miri,rust-src
       - run: cargo install cargo-careful
       - run: cargo miri test --all-features && cargo careful test --all-features
