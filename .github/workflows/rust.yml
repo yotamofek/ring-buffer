@@ -11,4 +11,5 @@ jobs:
         with:
           toolchain: nightly-2023-12-26
           components: miri
-      - run: cargo miri test --all-features
+      - run: cargo install cargo-careful
+      - run: cargo miri test --all-features && cargo careful test --all-features
