@@ -1,0 +1,13 @@
+[package]
+name = "ring-buffer"
+version = "0.1.0"
+edition = "2021"
+
+[[bench]]
+name = "iter"
+harness = false
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5.1"
