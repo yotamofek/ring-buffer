@@ -5,14 +5,13 @@ use std::{
     num::NonZeroUsize,
 };
 
-use crate::RingBuffer;
+use crate::{Pos, RingBuffer};
 
 macro_rules! iter {
     ($name:ident(*$raw_mut:tt T, {$( $mut_:tt )?}, $assume_init_ref:ident)) => {
         pub struct $name<'buf, A: Copy, const CAP: usize> {
             buf: *$raw_mut [MaybeUninit<A>; CAP],
-            len: usize,
-            at: usize,
+            pos: Pos<CAP>,
             _marker: PhantomData<&'buf $($mut_)? RingBuffer<A, CAP>>,
         }
 
@@ -20,17 +19,17 @@ macro_rules! iter {
             pub(crate) fn new(buf: &'buf $($mut_)? [MaybeUninit<A>; CAP], len: usize, at: usize) -> Self {
                 Self {
                     buf,
-                    len,
-                    at,
+                    pos: Pos::new(len, at),
                     _marker: PhantomData,
                 }
             }
 
             /// Returns a pointer to the item at the given index without doing bounds checks. Also assumes that the item is initialized.
             #[inline(always)]
-            fn get_unchecked(& $($mut_)? self, idx: usize) -> *$raw_mut A {
+            fn get_unchecked(& $($mut_)? self, index: usize) -> *$raw_mut A {
+                let index = self.pos.logical_index(index);
                 let ptr = self.buf.cast::<A>();
-                ptr.wrapping_add((self.at + idx) % CAP)
+                ptr.wrapping_add(index)
             }
         }
 
@@ -38,8 +37,7 @@ macro_rules! iter {
             fn clone(&self) -> Self {
                 Self {
                     buf: self.buf,
-                    len: self.len,
-                    at: self.at,
+                    pos: self.pos,
                     _marker: PhantomData,
                 }
             }
@@ -49,31 +47,31 @@ macro_rules! iter {
             type Item = &'buf $($mut_)? A;
 
             fn next(&mut self) -> Option<Self::Item> {
-                self.len = self.len.checked_sub(1)?;
+                self.pos.set_len(self.pos.len().checked_sub(1)?);
                 let item = self.get_unchecked(0);
-                self.at = (self.at + 1) % CAP;
+                self.pos.advance(1);
                 Some(unsafe { & $($mut_)? *item })
             }
 
             fn size_hint(&self) -> (usize, Option<usize>) {
-                (self.len, Some(self.len))
+                (self.pos.len(), Some(self.pos.len()))
             }
 
             fn count(self) -> usize {
-                self.len
+                self.pos.len()
             }
 
             fn advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
-                match self.len.checked_sub(n) {
+                match self.pos.len().checked_sub(n) {
                     Some(left) => {
-                        self.len = left;
-                        self.at = (self.at + n) % CAP;
+                        self.pos.set_len(left);
+                        self.pos.advance(n);
                         Ok(())
                     }
                     None => {
                         // `n > self.len`, because otherwise checked_sub would have returned Some
-                        let left = unsafe { NonZeroUsize::new_unchecked(n - self.len) };
-                        self.len = 0;
+                        let left = unsafe { NonZeroUsize::new_unchecked(n - self.pos.len()) };
+                        self.pos.set_len(0);
                         Err(left)
                     }
                 }
@@ -89,22 +87,22 @@ macro_rules! iter {
 
         impl<A: Copy, const CAP: usize> DoubleEndedIterator for $name<'_, A, CAP> {
             fn next_back(&mut self) -> Option<Self::Item> {
-                self.len = self.len.checked_sub(1)?;
-                let item = self.get_unchecked(self.len);
+                self.pos.set_len(self.pos.len().checked_sub(1)?);
+                let item = self.get_unchecked(self.pos.len());
                 Some(unsafe { & $($mut_)? *item })
             }
 
             fn advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
-                match self.len.checked_sub(n) {
+                match self.pos.len().checked_sub(n) {
                     Some(left) => {
-                        self.len = left;
+                        self.pos.set_len(left);
                         Ok(())
                     }
                     None => {
                         // `n > self.len`, because otherwise checked_sub
                         // would have returned Some
-                        let left = unsafe { NonZeroUsize::new_unchecked(n - self.len) };
-                        self.len = 0;
+                        let left = unsafe { NonZeroUsize::new_unchecked(n - self.pos.len()) };
+                        self.pos.set_len(0);
                         Err(left)
                     }
                 }
@@ -115,7 +113,7 @@ macro_rules! iter {
 
         impl<A: Copy, const CAP: usize> ExactSizeIterator for $name<'_, A, CAP> {
             fn len(&self) -> usize {
-                self.len
+                self.pos.len()
             }
         }
 
@@ -174,7 +172,7 @@ mod tests {
         assert_eq!(arr.pop_first(), Some(1));
         arr.with_vacancy().unwrap().write(5);
         arr.with_vacancy().unwrap().write(6);
-        assert_ne!(arr.at, 0);
+        assert_ne!(arr.pos.at(), 0);
 
         let mut iter = arr.iter();
 
@@ -201,7 +199,7 @@ mod tests {
         assert_eq!(arr.pop_first(), Some(1));
         arr.with_vacancy().unwrap().write(5);
         arr.with_vacancy().unwrap().write(6);
-        assert_ne!(arr.at, 0);
+        assert_ne!(arr.pos.at(), 0);
 
         assert!(arr.iter().rev().eq(&[6, 5, 4, 3, 2]));
 
@@ -248,7 +246,7 @@ mod tests {
         assert_eq!(arr.pop_first(), Some(1));
         arr.with_vacancy().unwrap().write(5);
         arr.with_vacancy().unwrap().write(6);
-        assert_ne!(arr.at, 0);
+        assert_ne!(arr.pos.at(), 0);
 
         arr.iter_mut()
             // this invokes __iterator_get_unchecked

@@ -14,6 +14,7 @@
 )]
 
 pub mod iter;
+mod pos;
 
 use std::{
     alloc::{Allocator, Global, Layout},
@@ -24,7 +25,10 @@ use std::{
     ptr,
 };
 
-use self::iter::{Iter, IterMut};
+use self::{
+    iter::{Iter, IterMut},
+    pos::Pos,
+};
 
 /// Very simple ring buffer that can hold up to `CAP` items of type `A`.
 #[derive(Clone, Copy)]
@@ -32,10 +36,7 @@ pub struct RingBuffer<A: Copy, const CAP: usize> {
     // Invariant: at least `len` items are initialized, starting from `at` and
     // circling back to the beginning of the buf if overflowing `CAP`
     buf: [MaybeUninit<A>; CAP],
-    // Invariant: `len` <= `CAP`
-    len: usize,
-    // Invariant: `at` < `CAP`
-    at: usize,
+    pos: Pos<CAP>,
 }
 
 impl<A: Copy, const CAP: usize> Default for RingBuffer<A, CAP> {
@@ -49,24 +50,23 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     pub const fn new() -> Self {
         Self {
             buf: MaybeUninit::uninit_array(),
-            len: 0,
-            at: 0,
+            pos: Pos::new(0, 0),
         }
     }
 
     /// Returns the number of items in the ring buffer.
     pub const fn len(&self) -> usize {
-        self.len
+        self.pos.len()
     }
 
     /// Returns `true` if the ring buffer is empty.
     pub const fn is_empty(&self) -> bool {
-        self.len == 0
+        self.pos.is_empty()
     }
 
     /// Returns `true` if the ring buffer is full.
     pub const fn is_full(&self) -> bool {
-        self.len == CAP
+        self.pos.is_full()
     }
 
     /// Returns the number of items that can be added to the ring buffer before it is full.
@@ -86,7 +86,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// assert_eq!(buf.remaining(), 1);
     /// ```
     pub const fn remaining(&self) -> usize {
-        CAP - self.len
+        CAP - self.len()
     }
 
     /// Returns `true` if the ring buffer has capacity for at least one more item.
@@ -94,13 +94,6 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// Same as `self.remaining() > 0`.
     pub const fn has_remaining(&self) -> bool {
         self.remaining() > 0
-    }
-
-    /// Returns the index in the underlying buffer corresponding to the given logical index.
-    /// The returned index is guaranteed to be in bounds (i.e. < `CAP`), but the indexed item not necessarily initialized.
-    #[inline(always)]
-    fn logical_index(&self, idx: usize) -> usize {
-        (self.at + idx) % CAP
     }
 
     /// Returns a reference to the first item in the ring buffer without doing bounds checks.
@@ -111,7 +104,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     #[inline(always)]
     unsafe fn first_element(&mut self) -> &mut MaybeUninit<A> {
         debug_assert!(CAP > 0);
-        self.buf.get_unchecked_mut(self.at)
+        self.buf.get_unchecked_mut(self.pos.at())
     }
 
     /// Returns a reference to the item at the given index without doing bounds checks. Also assumes that the item is initialized.
@@ -119,8 +112,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// # Safety
     /// The given index must be less than `self.len()`.
     pub unsafe fn get_unchecked(&self, index: usize) -> &A {
-        debug_assert!(index < self.len);
-        let index = self.logical_index(index);
+        debug_assert!(index < self.len());
+        let index = self.pos.logical_index(index);
         self.buf.get_unchecked(index).assume_init_ref()
     }
 
@@ -129,8 +122,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// # Safety
     /// The given index must be less than `self.len()`.
     pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut A {
-        debug_assert!(index < self.len);
-        let index = self.logical_index(index);
+        debug_assert!(index < self.len());
+        let index = self.pos.logical_index(index);
         self.buf.get_unchecked_mut(index).assume_init_mut()
     }
 
@@ -145,7 +138,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// assert_eq!(buf.get(2), None);
     /// ````
     pub fn get(&self, index: usize) -> Option<&A> {
-        if index >= self.len {
+        if index >= self.len() {
             None
         } else {
             Some(unsafe { self.get_unchecked(index) })
@@ -164,7 +157,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// assert_eq!(buf, [2, 6]);
     /// ```
     pub fn get_mut(&mut self, index: usize) -> Option<&mut A> {
-        if index >= self.len {
+        if index >= self.len() {
             None
         } else {
             Some(unsafe { self.get_unchecked_mut(index) })
@@ -194,8 +187,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
             );
             // SAFETY: buffer is non-empty, so has at least one element
             let item = unsafe { item.assume_init() };
-            self.at = self.logical_index(1);
-            self.len -= 1;
+            self.pos.advance(1);
+            self.pos.set_len(self.len() - 1);
             Some(item)
         }
     }
@@ -237,15 +230,15 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
             );
             // SAFETY: buffer is full, so has at least one element
             let item = unsafe { item.assume_init() };
-            self.at = self.logical_index(1);
+            self.pos.advance(1);
             Some(item)
         } else {
-            let index = self.logical_index(self.len);
+            let index = self.pos.logical_index(self.len());
             // SAFETY: `index` is in bounds
             unsafe {
                 self.buf.get_unchecked_mut(index).write(item);
             }
-            self.len += 1;
+            self.pos.set_len(self.len() + 1);
             None
         }
     }
@@ -281,18 +274,18 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 
     /// Returns an iterator over the items in the ring buffer.
     pub fn iter(&self) -> Iter<'_, A, CAP> {
-        Iter::new(&self.buf, self.len, self.at)
+        Iter::new(&self.buf, self.len(), self.pos.at())
     }
 
     /// Returns an iterator over the mutable references to the items in the ring buffer.
     pub fn iter_mut(&mut self) -> IterMut<'_, A, CAP> {
-        IterMut::new(&mut self.buf, self.len, self.at)
+        let len = self.len();
+        IterMut::new(&mut self.buf, len, self.pos.at())
     }
 
     /// Removes all items from the ring buffer.
     pub fn clear(&mut self) {
-        self.at = 0;
-        self.len = 0;
+        self.pos = Pos::default();
     }
 
     /// Copies the contents of the ring buffer into `dst` in a contiguous manner.
@@ -302,11 +295,11 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// `dst` must not overlap with `self.buf`.
     #[inline(always)]
     unsafe fn copy_into(&self, dst: *mut [MaybeUninit<A>]) {
-        let front_len = CAP.min(self.at + self.len) - self.at;
-        let back_len = self.len - front_len;
+        let front_len = CAP.min(self.pos.at() + self.len()) - self.pos.at();
+        let back_len = self.len() - front_len;
 
         ptr::copy_nonoverlapping::<MaybeUninit<A>>(
-            self.buf.as_ptr().add(self.at),
+            self.buf.as_ptr().add(self.pos.at()),
             dst.as_mut_ptr(),
             front_len,
         );
@@ -327,7 +320,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// assert_eq!(RingBuffer::<_, 3>::from([0, 1]).to_array(), None);
     /// ```
     pub fn to_array(&self) -> Option<[A; CAP]> {
-        if self.len != CAP {
+        if self.len() != CAP {
             return None;
         }
 
@@ -341,7 +334,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 
     /// Copies the contents of the ring buffer into a `Vec`, using the given allocator.
     pub fn to_vec_in<B: Allocator>(&self, alloc: B) -> Vec<A> {
-        match Layout::array::<A>(self.len) {
+        match Layout::array::<A>(self.len()) {
             Ok(_) => {}
             Err(_) =>
             // SAFETY: we already have an array of at least `self.len` items in `self.buf`,
@@ -352,7 +345,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
             },
         };
 
-        let mut slice = Box::new_uninit_slice_in(self.len, alloc);
+        let mut slice = Box::new_uninit_slice_in(self.len(), alloc);
         unsafe { self.copy_into(&mut *slice) };
         let slice = unsafe { Box::<[_], _>::assume_init(slice) };
         slice.to_vec()
@@ -370,9 +363,9 @@ impl<A: Copy, const CAP: usize> VacantEntry<'_, A, CAP> {
     pub fn write(&mut self, item: A) {
         let Self(buf) = self;
 
-        let index = buf.logical_index(buf.len);
+        let index = buf.pos.logical_index(buf.len());
         unsafe { buf.buf.get_unchecked_mut(index).write(item) };
-        buf.len += 1;
+        buf.pos.set_len(buf.len() + 1);
     }
 }
 
@@ -397,7 +390,10 @@ where
         unsafe {
             ptr::copy_nonoverlapping(arr.as_ptr().cast::<MaybeUninit<A>>(), buf.as_mut_ptr(), N)
         };
-        Self { buf, len: N, at: 0 }
+        Self {
+            buf,
+            pos: Pos::new(N, 0),
+        }
     }
 }
 
@@ -579,7 +575,7 @@ mod tests {
         assert_eq!(arr.to_array(), None);
         assert_eq!(arr.to_vec(), &[2, 3]);
         arr.with_vacancy().unwrap().write(4);
-        assert_ne!(arr.len, 0);
+        assert_ne!(arr.len(), 0);
         assert_eq!(arr.to_array(), Some([2, 3, 4]));
         assert_eq!(arr.to_vec(), &[2, 3, 4]);
     }

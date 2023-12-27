@@ -5,20 +5,24 @@ fn ring_buffer_skip_benchmark(c: &mut Criterion) {
     let mut ring_buffer: RingBuffer<u32, 16> = RingBuffer::from([0; 16]);
     ring_buffer.pop_first().unwrap();
 
-    c.bench_function("ring_buffer_skip", |b| {
-        b.iter(
-            #[inline(never)]
-            || {
-                let _ = black_box(ring_buffer)
-                    .iter()
-                    .cycle()
-                    .step_by(103)
-                    .take(black_box(2048))
-                    .sum::<u32>();
+    c.bench_function("iter_step_by", |b| {
+        #[inline(never)]
+        fn iter_step_by(buf: RingBuffer<u32, 16>) -> u32 {
+            buf.iter().cycle().step_by(103).take(black_box(2048)).sum()
+        }
 
-                let _ = black_box(ring_buffer).to_vec();
-            },
-        );
+        b.iter(|| iter_step_by(ring_buffer));
+    });
+
+    c.bench_function("to_vec", |b| {
+        #[inline(never)]
+        fn to_vec(buf: &RingBuffer<u32, 16>) {
+            let _ = buf.to_vec();
+        }
+
+        b.iter(|| {
+            to_vec(&black_box(ring_buffer));
+        });
     });
 }
 
