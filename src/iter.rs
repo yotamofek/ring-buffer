@@ -16,10 +16,10 @@ macro_rules! iter {
         }
 
         impl<'buf, A: Copy, const CAP: usize> $name<'buf, A, CAP> {
-            pub(crate) fn new(buf: &'buf $($mut_)? [MaybeUninit<A>; CAP], len: usize, at: usize) -> Self {
+            pub(crate) fn new(buf: &'buf $($mut_)? [MaybeUninit<A>; CAP], pos: Pos<CAP>) -> Self {
                 Self {
                     buf,
-                    pos: Pos::new(len, at),
+                    pos,
                     _marker: PhantomData,
                 }
             }
@@ -47,7 +47,8 @@ macro_rules! iter {
             type Item = &'buf $($mut_)? A;
 
             fn next(&mut self) -> Option<Self::Item> {
-                self.pos.set_len(self.pos.len().checked_sub(1)?);
+                // SAFETY: assuming `self.pos.len() < CAP`, then `self.pos.len() - 1 < CAP`
+                unsafe { self.pos.set_len(self.pos.len().checked_sub(1)?) };
                 let item = self.get_unchecked(0);
                 self.pos.advance(1);
                 Some(unsafe { & $($mut_)? *item })
@@ -64,14 +65,15 @@ macro_rules! iter {
             fn advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
                 match self.pos.len().checked_sub(n) {
                     Some(left) => {
-                        self.pos.set_len(left);
+                        // SAFETY: assuming `self.pos.len() < CAP`, then `self.pos.len() - n < CAP`
+                        unsafe { self.pos.set_len(left) };
                         self.pos.advance(n);
                         Ok(())
                     }
                     None => {
                         // `n > self.len`, because otherwise checked_sub would have returned Some
                         let left = unsafe { NonZeroUsize::new_unchecked(n - self.pos.len()) };
-                        self.pos.set_len(0);
+                        self.pos.clear_len();
                         Err(left)
                     }
                 }
@@ -87,7 +89,8 @@ macro_rules! iter {
 
         impl<A: Copy, const CAP: usize> DoubleEndedIterator for $name<'_, A, CAP> {
             fn next_back(&mut self) -> Option<Self::Item> {
-                self.pos.set_len(self.pos.len().checked_sub(1)?);
+                // SAFETY: assuming `self.pos.len() < CAP`, then `self.pos.len() - 1 < CAP`
+                unsafe { self.pos.set_len(self.pos.len().checked_sub(1)?) };
                 let item = self.get_unchecked(self.pos.len());
                 Some(unsafe { & $($mut_)? *item })
             }
@@ -95,14 +98,15 @@ macro_rules! iter {
             fn advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
                 match self.pos.len().checked_sub(n) {
                     Some(left) => {
-                        self.pos.set_len(left);
+                        // SAFETY: assuming `self.pos.len() < CAP`, then `self.pos.len() - n < CAP`
+                        unsafe { self.pos.set_len(left) };
                         Ok(())
                     }
                     None => {
                         // `n > self.len`, because otherwise checked_sub
                         // would have returned Some
                         let left = unsafe { NonZeroUsize::new_unchecked(n - self.pos.len()) };
-                        self.pos.set_len(0);
+                        self.pos.clear_len();
                         Err(left)
                     }
                 }

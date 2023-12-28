@@ -5,14 +5,18 @@
     generic_const_exprs,
     iter_advance_by,
     maybe_uninit_array_assume_init,
+    maybe_uninit_slice,
     maybe_uninit_uninit_array,
     min_specialization,
     new_uninit,
     slice_ptr_get,
+    slice_split_at_unchecked,
     trusted_len,
     trusted_random_access
 )]
 
+pub mod entry;
+mod error;
 pub mod iter;
 mod pos;
 
@@ -25,7 +29,10 @@ use std::{
     ptr,
 };
 
+pub use self::error::BufferFullError;
+
 use self::{
+    entry::VacantEntry,
     iter::{Iter, IterMut},
     pos::Pos,
 };
@@ -50,7 +57,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     pub const fn new() -> Self {
         Self {
             buf: MaybeUninit::uninit_array(),
-            pos: Pos::new(0, 0),
+            pos: Pos::zero(),
         }
     }
 
@@ -65,6 +72,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     }
 
     /// Returns `true` if the ring buffer is full.
+    ///
+    /// Note that it is equivalent to `!self.has_remaining()`, unless `CAP` is 0 in which case both `self.has_remaining()` and `self.is_full()` will return false.
     pub const fn is_full(&self) -> bool {
         self.pos.is_full()
     }
@@ -73,7 +82,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// Same as `CAP - self.len()`.
     ///
-    /// # Example
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::new();
@@ -91,26 +100,41 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 
     /// Returns `true` if the ring buffer has capacity for at least one more item.
     ///
-    /// Same as `self.remaining() > 0`.
+    /// Equivalent to `self.remaining() > 0`.
+    ///
+    /// Note that it is equivalent to `!self.is_full()`, unless `CAP` is 0 in which case both `self.has_remaining()` and `self.is_full()` will return false.
     pub const fn has_remaining(&self) -> bool {
         self.remaining() > 0
     }
 
-    /// Returns a reference to the first item in the ring buffer without doing bounds checks.
+    /// Returns a reference to the first, possibly uninitialized item.
     ///
     /// # Safety
     /// `CAP` must be greater than 0.
     /// It *is* safe to call this method on an empty ring buffer.
     #[inline(always)]
-    unsafe fn first_element(&mut self) -> &mut MaybeUninit<A> {
+    unsafe fn first_item(&mut self) -> &mut MaybeUninit<A> {
         debug_assert!(CAP > 0);
         self.buf.get_unchecked_mut(self.pos.at())
+    }
+
+    /// Returns a reference to the item past the last item, where the next item would be written.
+    ///
+    /// # Safety
+    /// `CAP` must be greater than 0.
+    /// It *is* safe to call this method on an empty ring buffer.
+    #[inline(always)]
+    unsafe fn next_item(&mut self) -> &mut MaybeUninit<A> {
+        debug_assert!(CAP > 0);
+        let index = self.pos.logical_index(self.len());
+        self.buf.get_unchecked_mut(index)
     }
 
     /// Returns a reference to the item at the given index without doing bounds checks. Also assumes that the item is initialized.
     ///
     /// # Safety
     /// The given index must be less than `self.len()`.
+    #[inline]
     pub unsafe fn get_unchecked(&self, index: usize) -> &A {
         debug_assert!(index < self.len());
         let index = self.pos.logical_index(index);
@@ -121,6 +145,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Safety
     /// The given index must be less than `self.len()`.
+    #[inline]
     pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut A {
         debug_assert!(index < self.len());
         let index = self.pos.logical_index(index);
@@ -129,7 +154,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 
     /// Returns a reference to the item at the given index, or `None` if the index is out of bounds.
     ///
-    /// # Example:
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// let buf = RingBuffer::<_, 3>::from([0, 1]);
@@ -147,7 +172,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 
     /// Returns a mutable reference to the item at the given index, or `None` if the index is out of bounds.
     ///
-    /// # Example:
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([1, 2]);
@@ -164,9 +189,9 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         }
     }
 
-    /// Removes the first item from the ring buffer and returns it, or `None` if the buffer is empty.
+    /// Removes the first item from the ring buffer and returns it, or `None` if the buffer (is empty)[Self::is_empty].
     ///
-    /// # Example:
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::new();
@@ -176,34 +201,44 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// assert_eq!(buf.pop_first(), Some(1));
     /// assert_eq!(buf.pop_first(), None);
     /// ```
+    #[inline]
     pub fn pop_first(&mut self) -> Option<A> {
         if self.is_empty() {
-            None
+            return None;
+        }
+
+        let item = mem::replace(
+            // SAFETY: `CAP` > 0, otherwise `self.is_empty()` would have returned `true`
+            unsafe { self.first_item() },
+            MaybeUninit::uninit(),
+        );
+        // SAFETY: buffer is non-empty, so has at least one item
+        let item = unsafe { item.assume_init() };
+        self.pos.advance(1);
+        // SAFETY: `0 < self.len() <= CAP`, so `self.len() - 1` will not underflow and is in bounds
+        unsafe { self.pos.set_len(self.len() - 1) };
+        Some(item)
+    }
+
+    /// If the ring [has remaining capacity](Self::has_remaining), returns a [`VacantEntry`] that can be used to push a new item to the end of the ring buffer.
+    ///
+    /// See also [`try_push`](Self::try_push) and [`try_push_with`](Self::try_push_with).
+    pub fn with_vacancy(&mut self) -> Option<VacantEntry<A, CAP>> {
+        if self.has_remaining() {
+            // SAFETY: `self.has_remaining()` returned `true`, so `self.len() < CAP`
+            Some(unsafe { VacantEntry::new_unchecked(self) })
         } else {
-            let item = mem::replace(
-                // SAFETY: `CAP` > 0, otherwise `self.is_empty()` would have returned `true`
-                unsafe { self.first_element() },
-                MaybeUninit::uninit(),
-            );
-            // SAFETY: buffer is non-empty, so has at least one element
-            let item = unsafe { item.assume_init() };
-            self.pos.advance(1);
-            self.pos.set_len(self.len() - 1);
-            Some(item)
+            None
         }
     }
 
-    pub fn with_vacancy(&mut self) -> Option<VacantEntry<A, CAP>> {
-        (!self.is_full()).then_some(VacantEntry(self))
-    }
-
-    /// Adds an item to the end of the ring buffer, removing the first item if the buffer is full.
+    /// Adds an item to the end of the ring buffer, removing the first item if the buffer (is full)[Self::is_full].
     /// Returns the removed item if the buffer was full, otherwise `None`.
     ///
     /// # Panics
     /// Panics if `CAP` is 0.
     ///
-    /// # Example
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::new();
@@ -219,36 +254,97 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// assert_eq!(buf, [2, 3, 4]);
     /// ```
     #[track_caller]
+    #[inline]
     pub fn pop_push(&mut self, item: A) -> Option<A> {
         assert!(CAP > 0);
 
         if self.is_full() {
             let item = mem::replace(
-                // SAFETY: `CAP` > 0, otherwise `self.is_full()` would have returned `false`
-                unsafe { self.first_element() },
+                // SAFETY: `CAP > 0` was asserted above
+                unsafe { self.first_item() },
                 MaybeUninit::new(item),
             );
-            // SAFETY: buffer is full, so has at least one element
+            // SAFETY: buffer is full, so has at least one item
             let item = unsafe { item.assume_init() };
             self.pos.advance(1);
             Some(item)
         } else {
-            let index = self.pos.logical_index(self.len());
-            // SAFETY: `index` is in bounds
-            unsafe {
-                self.buf.get_unchecked_mut(index).write(item);
-            }
-            self.pos.set_len(self.len() + 1);
+            // SAFETY `CAP > 0` was asserted above
+            unsafe { self.next_item() }.write(item);
+            // SAFETY: `self.len() < CAP` (since `self.is_full()` returned false), so `self.len() + 1` will not overflow and is in bounds
+            unsafe { self.pos.set_len(self.len() + 1) };
             None
         }
+    }
+
+    /// Tries to add an item to the end of the ring buffer, if the buffer has remaining capacity.
+    /// Returns `Ok(())` if successful, otherwise returns `Err(BufferFullError)`.
+    ///
+    /// The item is constructed by calling the given closure, which is only called if the buffer has remaining capacity.
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([0, 1]);
+    /// let mut call_count = 0;
+    /// assert!(
+    ///     buf.try_push_with(|| {
+    ///         call_count += 1;
+    ///         2
+    ///     }
+    /// ).is_ok());
+    /// assert_eq!(call_count, 1);
+    /// assert_eq!(buf, [0, 1, 2]);
+    /// assert!(
+    ///     buf.try_push_with(|| {
+    ///         call_count += 1;
+    ///         3
+    ///     }
+    /// ).is_err());
+    /// assert_eq!(call_count, 1);
+    /// ```
+    #[inline]
+    pub fn try_push_with<F: FnOnce() -> A>(&mut self, f: F) -> Result<(), BufferFullError> {
+        self.with_vacancy()
+            .ok_or(BufferFullError::new())?
+            .write(f());
+        Ok(())
+    }
+
+    /// Adds an item to the end of the ring buffer, assuming the buffer has remaining capacity.
+    ///
+    /// # Safety
+    /// The following invariant must be held:
+    /// - `self.has_remaining()` (which implies `CAP > 0`)
+    #[inline]
+    pub unsafe fn push_unchecked(&mut self, item: A) {
+        debug_assert!(self.has_remaining());
+        self.next_item().write(item);
+        self.pos.set_len(self.len() + 1);
+    }
+
+    /// Tries to add an item to the end of the ring buffer, if the buffer has remaining capacity.
+    /// Returns `Ok(())` if successful, otherwise returns `Err(BufferFullError)`.
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([1, 2]);
+    /// assert_eq!(buf.try_push(3), Ok(()));
+    /// assert_eq!(buf, [1, 2, 3]);
+    /// assert!(buf.try_push(4).is_err());
+    /// ```
+    #[inline]
+    pub fn try_push(&mut self, item: A) -> Result<(), BufferFullError> {
+        self.try_push_with(|| item)
     }
 
     /// Adds an item to the end of the ring buffer.
     ///
     /// # Panics
-    /// Panics if the buffer is full.
+    /// Panics if the buffer [is full](Self::is_full).
     ///
-    /// # Example
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::new();
@@ -266,26 +362,24 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// buf.push(3);
     /// ```
     #[track_caller]
+    #[inline]
     pub fn push(&mut self, item: A) {
-        self.with_vacancy()
-            .expect("ring buffer is full")
-            .write(item);
+        self.try_push(item).unwrap()
     }
 
     /// Returns an iterator over the items in the ring buffer.
     pub fn iter(&self) -> Iter<'_, A, CAP> {
-        Iter::new(&self.buf, self.len(), self.pos.at())
+        Iter::new(&self.buf, self.pos)
     }
 
     /// Returns an iterator over the mutable references to the items in the ring buffer.
     pub fn iter_mut(&mut self) -> IterMut<'_, A, CAP> {
-        let len = self.len();
-        IterMut::new(&mut self.buf, len, self.pos.at())
+        IterMut::new(&mut self.buf, self.pos)
     }
 
     /// Removes all items from the ring buffer.
     pub fn clear(&mut self) {
-        self.pos = Pos::default();
+        self.pos = Pos::zero();
     }
 
     /// Copies the contents of the ring buffer into `dst` in a contiguous manner.
@@ -295,30 +389,184 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// `dst` must not overlap with `self.buf`.
     #[inline(always)]
     unsafe fn copy_into(&self, dst: *mut [MaybeUninit<A>]) {
-        let front_len = CAP.min(self.pos.at() + self.len()) - self.pos.at();
-        let back_len = self.len() - front_len;
+        let front = self.front_slice();
+        let back = self.back_slice();
 
-        ptr::copy_nonoverlapping::<MaybeUninit<A>>(
-            self.buf.as_ptr().add(self.pos.at()),
-            dst.as_mut_ptr(),
-            front_len,
-        );
-        ptr::copy_nonoverlapping::<MaybeUninit<A>>(
-            self.buf.as_ptr(),
-            dst.as_mut_ptr().add(front_len),
-            back_len,
-        );
+        dst.as_mut_ptr()
+            .copy_from_nonoverlapping(front.as_ptr().cast(), front.len());
+        dst.as_mut_ptr()
+            .add(front.len())
+            .copy_from_nonoverlapping(back.as_ptr().cast(), back.len());
+    }
+
+    /// Returns a slice containing the contents of the ring buffer, assuming ring buffer is layed out contiguously in memory.
+    ///
+    /// # Safety
+    /// The following invariant must be held:
+    /// - `self.pos.is_contiguous()`
+    #[inline]
+    pub unsafe fn as_slice_unchecked(&self) -> &[A] {
+        debug_assert!(self.pos.is_contiguous());
+        let at = self.pos.at();
+        let len = self.len();
+        MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(at..at + len))
+    }
+
+    /// Returns a mutable slice containing the contents of the ring buffer, assuming ring buffer is layed out contiguously in memory.
+    ///
+    /// # Safety
+    /// The following invariant must be held:
+    /// - `self.pos.is_contiguous()`
+    #[inline]
+    pub unsafe fn as_slice_unchecked_mut(&mut self) -> &mut [A] {
+        debug_assert!(self.pos.is_contiguous());
+        let at = self.pos.at();
+        let len = self.len();
+        MaybeUninit::slice_assume_init_mut(self.buf.get_unchecked_mut(at..at + len))
+    }
+
+    /// Returns a slice reference containing the contents of the ring buffer, if the ring buffer is layed out contiguously in memory.
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([0, 1]);
+    /// assert_eq!(buf.as_slice(), Some(&[0, 1][..]));
+    /// buf.push(2);
+    /// assert_eq!(buf.as_slice(), Some(&[0, 1, 2][..]));
+    /// buf.pop_first();
+    /// assert_eq!(buf.as_slice(), Some(&[1, 2][..]));
+    /// buf.push(3);
+    /// assert_eq!(buf.as_slice(), None);
+    /// buf.extend([4, 5]);
+    /// assert_eq!(buf.as_slice(), Some(&[3, 4, 5][..]));
+    /// ```
+    #[inline]
+    pub fn as_slice(&self) -> Option<&[A]> {
+        self.pos.is_contiguous().then(|| {
+            // SAFETY: `self.pos.is_contiguous()` returned `true`
+            unsafe { self.as_slice_unchecked() }
+        })
+    }
+
+    /// Returns a slice mutable slice reference containing the contents of the ring buffer, if the ring buffer is layed out contiguously in memory.
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([0, 1]);
+    /// buf.as_slice_mut().unwrap().copy_from_slice(&[2, 3]);
+    /// assert_eq!(buf, [2, 3]);
+    /// buf.extend([4, 5]);
+    /// assert_eq!(buf.as_slice_mut(), None);
+    /// buf.extend([6, 7]);
+    /// buf.as_slice_mut().unwrap().copy_from_slice(&[8, 9, 10]);
+    /// assert_eq!(buf, [8, 9, 10]);
+    /// ```
+    #[inline]
+    pub fn as_slice_mut(&mut self) -> Option<&mut [A]> {
+        self.pos.is_contiguous().then(|| {
+            // SAFETY: `self.pos.is_contiguous()` returned `true`
+            unsafe { self.as_slice_unchecked_mut() }
+        })
+    }
+
+    /// Returns a slice reference containing the front part of the ring buffer.
+    ///
+    /// If the ring buffer is not layed out contiguously in memory,
+    /// this slice will not contain all the items, and the rest of the items will be in the [back part of the ring buffer](Self::back_slice).
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([0, 1, 2]);
+    /// assert_eq!(buf.front_slice(), &[0, 1, 2][..]);
+    /// assert_eq!(buf.pop_first(), Some(0));
+    /// assert_eq!(buf.front_slice(), &[1, 2][..]);
+    /// buf.push(3);
+    /// assert_eq!(buf.front_slice(), &[1, 2][..]);
+    /// buf.pop_push(4);
+    /// assert_eq!(buf.front_slice(), &[2][..]);
+    /// ```
+    pub fn front_slice(&self) -> &[A] {
+        let at = self.pos.at();
+        let len = self.pos.front_len();
+        unsafe { MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(at..at + len)) }
+    }
+
+    pub fn front_slice_mut(&mut self) -> &mut [A] {
+        self.split_mut_slices().0
+    }
+
+    /// Returns a slice reference containing the back part of the ring buffer.
+    ///
+    /// If the ring buffer is layed out contiguously in memory, this slice will be empty. Otherwise, it will contain all the items that are not in the [front part of the ring buffer](Self::front_slice).
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([0, 1, 2]);
+    /// assert_eq!(buf.back_slice(), &[][..]);
+    /// // at this point, the next item will be written to the back part of the buffer
+    /// assert_eq!(buf.pop_push(3), Some(0));
+    /// assert_eq!(buf.back_slice(), &[3][..]);
+    /// ```
+    pub fn back_slice(&self) -> &[A] {
+        let len = self.pos.back_len();
+        unsafe { MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(..len)) }
+    }
+
+    pub fn back_slice_mut(&mut self) -> &mut [A] {
+        self.split_mut_slices().1
+    }
+
+    /// Splits the ring buffer into two mutable slice references, one containing the front part of the ring buffer, and one containing the back part.
+    ///
+    /// If the ring buffer is layed out contiguously in memory, the back slice will be empty, and the front slice will contain all the items.
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::new();
+    /// let (front, back) = buf.split_mut_slices();
+    /// assert_eq!(front, &[][..]);
+    /// assert_eq!(back, &[][..]);
+    /// buf.extend([0, 1, 2]);
+    /// let (front, back) = buf.split_mut_slices();
+    /// assert_eq!(front, &[0, 1, 2][..]);
+    /// assert_eq!(back, &[][..]);
+    /// buf.pop_push(3);
+    /// let (front, back) = buf.split_mut_slices();
+    /// front.copy_from_slice(&[4, 5]);
+    /// back.copy_from_slice(&[6]);
+    /// assert_eq!(buf, [4, 5, 6]);
+    /// buf.pop_push(7);
+    /// let (front, back) = buf.split_mut_slices();
+    /// front.copy_from_slice(&[8]);
+    /// back.copy_from_slice(&[9, 10]);
+    /// assert_eq!(buf, [8, 9, 10]);
+    /// ```
+    pub fn split_mut_slices(&mut self) -> (&mut [A], &mut [A]) {
+        let front_len = self.pos.front_len();
+        let back_len = self.pos.back_len();
+        let (back, front) = unsafe { self.buf.split_at_mut_unchecked(self.pos.at()) };
+        let front =
+            unsafe { MaybeUninit::slice_assume_init_mut(front.get_unchecked_mut(..front_len)) };
+        let back =
+            unsafe { MaybeUninit::slice_assume_init_mut(back.get_unchecked_mut(..back_len)) };
+        (front, back)
     }
 
     /// Copies the contents of the ring buffer into an array, if the ring buffer is full.
     /// Otherwise, returns `None`.
     ///
-    /// # Example:
+    /// # Examples
     /// ```
     /// # use ring_buffer::RingBuffer;
     /// assert_eq!(RingBuffer::<_, 3>::from([0, 1, 2]).to_array(), Some([0, 1, 2]));
     /// assert_eq!(RingBuffer::<_, 3>::from([0, 1]).to_array(), None);
     /// ```
+    #[inline]
     pub fn to_array(&self) -> Option<[A; CAP]> {
         if self.len() != CAP {
             return None;
@@ -333,6 +581,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     }
 
     /// Copies the contents of the ring buffer into a `Vec`, using the given allocator.
+    #[inline]
     pub fn to_vec_in<B: Allocator>(&self, alloc: B) -> Vec<A> {
         match Layout::array::<A>(self.len()) {
             Ok(_) => {}
@@ -357,19 +606,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     }
 }
 
-pub struct VacantEntry<'buf, A: Copy, const CAP: usize>(&'buf mut RingBuffer<A, CAP>);
-
-impl<A: Copy, const CAP: usize> VacantEntry<'_, A, CAP> {
-    pub fn write(&mut self, item: A) {
-        let Self(buf) = self;
-
-        let index = buf.pos.logical_index(buf.len());
-        unsafe { buf.buf.get_unchecked_mut(index).write(item) };
-        buf.pos.set_len(buf.len() + 1);
-    }
-}
-
-/// # Example:
+/// # Examples
 ///
 /// ```rust
 /// # use ring_buffer::RingBuffer;
@@ -392,7 +629,8 @@ where
         };
         Self {
             buf,
-            pos: Pos::new(N, 0),
+            // SAFETY: `CAP - N` does not underflow, so `N <= CAP`
+            pos: unsafe { Pos::new_unchecked(N, 0) },
         }
     }
 }
@@ -400,7 +638,10 @@ where
 /// Extends the ring buffer with the contents of the given iterator, popping items from the front
 /// of the ring buffer if necessary.
 ///
-/// # Example:
+/// # Panics
+/// Panics if `CAP` is 0.
+///
+/// # Examples
 /// ```
 /// # use ring_buffer::RingBuffer;
 /// let mut buf = RingBuffer::<_, 3>::new();
@@ -422,7 +663,7 @@ impl<A: Copy, const CAP: usize> Extend<A> for RingBuffer<A, CAP> {
 ///
 /// Unlike the implementation of `Extend`, if the iterator yields more than `CAP` items, a panic occurs.
 ///
-/// # Example:
+/// # Examples
 /// ```
 /// # use ring_buffer::RingBuffer;
 /// assert_eq!(RingBuffer::<_, 3>::from_iter([0, 1]), &[0, 1]);
