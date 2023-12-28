@@ -8,7 +8,11 @@ use std::{
 use crate::{Pos, RingBuffer};
 
 macro_rules! iter {
-    ($name:ident(*$raw_mut:tt T, {$( $mut_:tt )?}, $assume_init_ref:ident)) => {
+    {
+        $(#[$attr:meta])*
+        $name:ident(*$raw_mut:tt T, {$( $mut_:tt )?}, $assume_init_ref:ident)
+    } => {
+        $(#[$attr])*
         pub struct $name<'buf, A: Copy, const CAP: usize> {
             buf: *$raw_mut [MaybeUninit<A>; CAP],
             pos: Pos<CAP>,
@@ -133,8 +137,14 @@ macro_rules! iter {
     };
 }
 
-iter!(Iter(*const T, {/* no mut */}, assume_init_ref));
-iter!(IterMut(*mut T, {mut}, assume_init_mut));
+iter! {
+    /// An iterator over references to the items in a ring buffer.
+    Iter(*const T, {/* no mut */}, assume_init_ref)
+}
+iter! {
+    /// An iterator over mutable references to the items in a ring buffer.
+    IterMut(*mut T, {mut}, assume_init_mut)
+}
 
 unsafe impl<'buf, A: Copy + Sync, const CAP: usize> Sync for Iter<'buf, A, CAP> {}
 unsafe impl<'buf, A: Copy + Sync, const CAP: usize> Send for Iter<'buf, A, CAP> {}

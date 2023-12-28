@@ -10,6 +10,7 @@
     min_specialization,
     new_uninit,
     slice_ptr_get,
+    slice_ptr_len,
     slice_split_at_unchecked,
     trusted_len,
     trusted_random_access
@@ -17,7 +18,7 @@
 
 pub mod entry;
 mod error;
-pub mod iter;
+mod iter;
 mod pos;
 
 use std::{
@@ -29,13 +30,12 @@ use std::{
     ptr,
 };
 
-pub use self::error::BufferFullError;
-
-use self::{
-    entry::VacantEntry,
+pub use self::{
+    error::BufferFullError,
     iter::{Iter, IterMut},
-    pos::Pos,
 };
+
+use self::{entry::VacantEntry, pos::Pos};
 
 /// Very simple ring buffer that can hold up to `CAP` items of type `A`.
 #[derive(Clone, Copy)]
@@ -189,7 +189,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         }
     }
 
-    /// Removes the first item from the ring buffer and returns it, or `None` if the buffer (is empty)[Self::is_empty].
+    /// Removes the first item from the ring buffer and returns it, or `None` if the buffer [is empty](Self::is_empty).
     ///
     /// # Examples
     /// ```
@@ -232,7 +232,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         }
     }
 
-    /// Adds an item to the end of the ring buffer, removing the first item if the buffer (is full)[Self::is_full].
+    /// Adds an item to the end of the ring buffer, removing the first item if the buffer [is full](Self::is_full).
     /// Returns the removed item if the buffer was full, otherwise `None`.
     ///
     /// # Panics
@@ -277,7 +277,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         }
     }
 
-    /// Tries to add an item to the end of the ring buffer, if the buffer has remaining capacity.
+    /// Tries to add an item to the end of the ring buffer, if the buffer [has remaining capacity](Self::has_remaining).
     /// Returns `Ok(())` if successful, otherwise returns `Err(BufferFullError)`.
     ///
     /// The item is constructed by calling the given closure, which is only called if the buffer has remaining capacity.
@@ -311,7 +311,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         Ok(())
     }
 
-    /// Adds an item to the end of the ring buffer, assuming the buffer has remaining capacity.
+    /// Adds an item to the end of the ring buffer, assuming the buffer [has remaining capacity](Self::has_remaining).
     ///
     /// # Safety
     /// The following invariant must be held:
@@ -323,7 +323,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         self.pos.set_len(self.len() + 1);
     }
 
-    /// Tries to add an item to the end of the ring buffer, if the buffer has remaining capacity.
+    /// Tries to add an item to the end of the ring buffer, if the buffer [has remaining capacity](Self::has_remaining).
     /// Returns `Ok(())` if successful, otherwise returns `Err(BufferFullError)`.
     ///
     /// # Examples
@@ -342,7 +342,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// Adds an item to the end of the ring buffer.
     ///
     /// # Panics
-    /// Panics if the buffer [is full](Self::is_full).
+    /// Panics if the buffer [has no remaining capacity](Self::has_remaining).
     ///
     /// # Examples
     /// ```
@@ -389,6 +389,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// `dst` must not overlap with `self.buf`.
     #[inline(always)]
     unsafe fn copy_into(&self, dst: *mut [MaybeUninit<A>]) {
+        debug_assert!(dst.len() >= self.len());
         let front = self.front_slice();
         let back = self.back_slice();
 
@@ -494,13 +495,20 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         unsafe { MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(at..at + len)) }
     }
 
+    /// Returns a mutable slice reference containing the front part of the ring buffer.
+    ///
+    /// If the ring buffer is not layed out contiguously in memory,
+    /// this slice will not contain all the items, and the rest of the items will be in the [back part of the ring buffer](Self::back_slice_mut).
+    ///
+    /// See also [`split_mut_slices`](Self::split_mut_slices).
     pub fn front_slice_mut(&mut self) -> &mut [A] {
         self.split_mut_slices().0
     }
 
     /// Returns a slice reference containing the back part of the ring buffer.
     ///
-    /// If the ring buffer is layed out contiguously in memory, this slice will be empty. Otherwise, it will contain all the items that are not in the [front part of the ring buffer](Self::front_slice).
+    /// If the ring buffer is layed out contiguously in memory,
+    /// this slice will be empty. Otherwise, it will contain all the items that are not in the [front part of the ring buffer](Self::front_slice).
     ///
     /// # Examples
     /// ```
@@ -516,13 +524,20 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         unsafe { MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(..len)) }
     }
 
+    /// Returns a mutable slice reference containing the back part of the ring buffer.
+    ///
+    /// If the ring buffer is layed out contiguously in memory,
+    /// this slice will be empty. Otherwise, it will contain all the items that are not in the [front part of the ring buffer](Self::front_slice_mut).
+    ///
+    /// See also [`split_mut_slices`](Self::split_mut_slices).
     pub fn back_slice_mut(&mut self) -> &mut [A] {
         self.split_mut_slices().1
     }
 
     /// Splits the ring buffer into two mutable slice references, one containing the front part of the ring buffer, and one containing the back part.
     ///
-    /// If the ring buffer is layed out contiguously in memory, the back slice will be empty, and the front slice will contain all the items.
+    /// If the ring buffer is layed out contiguously in memory,
+    /// the back slice will be empty, and the front slice will contain all the items.
     ///
     /// # Examples
     /// ```
@@ -557,7 +572,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         (front, back)
     }
 
-    /// Copies the contents of the ring buffer into an array, if the ring buffer is full.
+    /// Copies the contents of the ring buffer into an array, if the ring buffer [is full](Self::is_full).
     /// Otherwise, returns `None`.
     ///
     /// # Examples
@@ -568,7 +583,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// ```
     #[inline]
     pub fn to_array(&self) -> Option<[A; CAP]> {
-        if self.len() != CAP {
+        if !self.is_full() {
             return None;
         }
 
@@ -834,7 +849,14 @@ mod tests {
         assert_eq!(arr.get_mut(0), None);
         assert!(arr.is_full());
         assert!(arr.is_empty());
+        assert!(!arr.has_remaining());
         assert_eq!(arr.len(), 0);
+        assert_eq!(arr.as_slice(), Some(&[][..]));
+        assert_eq!(arr.as_slice_mut(), Some(&mut [][..]));
+        assert_eq!(arr.front_slice(), &[]);
+        assert_eq!(arr.front_slice_mut(), &mut []);
+        assert_eq!(arr.back_slice(), &[]);
+        assert_eq!(arr.back_slice_mut(), &mut []);
     }
 
     #[test]
