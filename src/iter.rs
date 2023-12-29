@@ -1,3 +1,5 @@
+//! Iterators over the items in a ring buffer.
+
 use std::{
     iter::{FusedIterator, TrustedLen, TrustedRandomAccess, TrustedRandomAccessNoCoerce},
     marker::PhantomData,

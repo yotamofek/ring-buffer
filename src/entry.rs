@@ -1,3 +1,5 @@
+//! Entry API.
+
 use crate::RingBuffer;
 
 pub struct VacantEntry<'buf, A: Copy, const CAP: usize>(

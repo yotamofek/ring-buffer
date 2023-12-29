@@ -1,3 +1,5 @@
+//! Error types for the ring buffer.
+
 use std::fmt::{self, Debug, Formatter};
 
 /// Error returned when trying to push to a full ring buffer.

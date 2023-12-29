@@ -17,8 +17,8 @@
 )]
 
 pub mod entry;
-mod error;
-mod iter;
+pub mod error;
+pub mod iter;
 mod pos;
 
 use std::{
@@ -379,7 +379,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 
     /// Removes all items from the ring buffer.
     pub fn clear(&mut self) {
-        self.pos = Pos::zero();
+        *self = Self::new();
     }
 
     /// Copies the contents of the ring buffer into `dst` in a contiguous manner.
@@ -857,6 +857,7 @@ mod tests {
         assert_eq!(arr.front_slice_mut(), &mut []);
         assert_eq!(arr.back_slice(), &[]);
         assert_eq!(arr.back_slice_mut(), &mut []);
+        assert_eq!(arr.split_mut_slices(), (&mut [][..], &mut [][..]));
     }
 
     #[test]
