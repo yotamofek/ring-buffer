@@ -71,13 +71,6 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         self.pos.is_empty()
     }
 
-    /// Returns `true` if the ring buffer is full.
-    ///
-    /// Note that it is equivalent to `!self.has_remaining()`, unless `CAP` is 0 in which case both `self.has_remaining()` and `self.is_full()` will return false.
-    pub const fn is_full(&self) -> bool {
-        self.pos.is_full()
-    }
-
     /// Returns the number of items that can be added to the ring buffer before it is full.
     ///
     /// Same as `CAP - self.len()`.
@@ -101,8 +94,6 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// Returns `true` if the ring buffer has capacity for at least one more item.
     ///
     /// Equivalent to `self.remaining() > 0`.
-    ///
-    /// Note that it is equivalent to `!self.is_full()`, unless `CAP` is 0 in which case both `self.has_remaining()` and `self.is_full()` will return false.
     pub const fn has_remaining(&self) -> bool {
         self.remaining() > 0
     }
@@ -232,7 +223,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         }
     }
 
-    /// Adds an item to the end of the ring buffer, removing the first item if the buffer [is full](Self::is_full).
+    /// Adds an item to the end of the ring buffer, removing the first item if the buffer [has no remaining capacity](Self::has_remaining).
     /// Returns the removed item if the buffer was full, otherwise `None`.
     ///
     /// # Panics
@@ -258,20 +249,18 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     pub fn pop_push(&mut self, item: A) -> Option<A> {
         assert!(CAP > 0);
 
-        if self.is_full() {
+        if !self.has_remaining() {
             let item = mem::replace(
-                // SAFETY: `CAP > 0` was asserted above
-                unsafe { self.first_item() },
-                MaybeUninit::new(item),
+                // SAFETY: `CAP > 0` was asserted above, and buffer is full, so has at least one item
+                unsafe { self.first_item().assume_init_mut() },
+                item,
             );
-            // SAFETY: buffer is full, so has at least one item
-            let item = unsafe { item.assume_init() };
             self.pos.advance(1);
             Some(item)
         } else {
             // SAFETY `CAP > 0` was asserted above
             unsafe { self.next_item() }.write(item);
-            // SAFETY: `self.len() < CAP` (since `self.is_full()` returned false), so `self.len() + 1` will not overflow and is in bounds
+            // SAFETY: `self.len() < CAP` (since `self.has_remaining()` returned true), so `self.len() + 1` will not overflow and is in bounds
             unsafe { self.pos.set_len(self.len() + 1) };
             None
         }
@@ -572,7 +561,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         (front, back)
     }
 
-    /// Copies the contents of the ring buffer into an array, if the ring buffer [is full](Self::is_full).
+    /// Copies the contents of the ring buffer into an array, if the ring buffer's capacity is fully used.
     /// Otherwise, returns `None`.
     ///
     /// # Examples
@@ -583,7 +572,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// ```
     #[inline]
     pub fn to_array(&self) -> Option<[A; CAP]> {
-        if !self.is_full() {
+        if self.has_remaining() {
             return None;
         }
 
@@ -770,14 +759,14 @@ mod tests {
         assert_eq!(arr.iter().next(), None);
         assert_eq!(arr, []);
         assert!(arr.is_empty());
-        assert!(!arr.is_full());
+        assert!(arr.has_remaining());
 
         arr.with_vacancy().unwrap().write(0);
         arr.with_vacancy().unwrap().write(1);
         assert_eq!(arr, [0, 1]);
         assert_eq!(arr.len(), 2);
         assert!(!arr.is_empty());
-        assert!(!arr.is_full());
+        assert!(arr.has_remaining());
 
         // fill cap
         arr.with_vacancy().unwrap().write(2);
@@ -785,16 +774,16 @@ mod tests {
         assert_eq!(arr, [0, 1, 2]);
         assert_eq!(arr.len(), 3);
         assert!(!arr.is_empty());
-        assert!(arr.is_full());
+        assert!(!arr.has_remaining());
         assert!(arr.with_vacancy().is_none());
 
         assert_eq!(arr.pop_first(), Some(0));
         assert_eq!(arr, [1, 2]);
-        assert!(!arr.is_full());
+        assert!(arr.has_remaining());
         assert!(arr.iter().eq(&[1, 2]));
 
         arr.with_vacancy().unwrap().write(3);
-        assert!(arr.is_full());
+        assert!(!arr.has_remaining());
         assert_eq!(arr, [1, 2, 3]);
 
         assert_eq!(arr.pop_first(), Some(1));
@@ -847,7 +836,6 @@ mod tests {
         assert!(arr.iter_mut().eq(&[]));
         assert_eq!(arr.get(0), None);
         assert_eq!(arr.get_mut(0), None);
-        assert!(arr.is_full());
         assert!(arr.is_empty());
         assert!(!arr.has_remaining());
         assert_eq!(arr.len(), 0);

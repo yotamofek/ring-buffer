@@ -54,11 +54,6 @@ impl<const CAP: usize> Pos<CAP> {
     }
 
     #[inline(always)]
-    pub const fn is_full(&self) -> bool {
-        self.len == CAP
-    }
-
-    #[inline(always)]
     pub const fn is_contiguous(&self) -> bool {
         self.at + self.len <= CAP
     }

@@ -4,6 +4,7 @@ use ring_buffer::RingBuffer;
 fn ring_buffer_skip_benchmark(c: &mut Criterion) {
     let mut ring_buffer: RingBuffer<u32, 16> = RingBuffer::from([0; 16]);
     ring_buffer.pop_first().unwrap();
+    ring_buffer.clear();
 
     c.bench_function("iter_step_by", |b| {
         #[inline(never)]
