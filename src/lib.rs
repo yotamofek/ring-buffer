@@ -214,6 +214,15 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// If the ring [has remaining capacity](Self::has_remaining), returns a [`VacantEntry`] that can be used to push a new item to the end of the ring buffer.
     ///
     /// See also [`try_push`](Self::try_push) and [`try_push_with`](Self::try_push_with).
+    ///
+    /// # Examples
+    /// ```
+    /// # use ring_buffer::RingBuffer;
+    /// let mut buf = RingBuffer::<_, 3>::from([1, 2]);
+    /// buf.with_vacancy().unwrap().write(3);
+    /// assert_eq!(buf, [1, 2, 3]);
+    /// assert!(buf.with_vacancy().is_none());
+    /// ```
     pub fn with_vacancy(&mut self) -> Option<VacantEntry<A, CAP>> {
         if self.has_remaining() {
             // SAFETY: `self.has_remaining()` returned `true`, so `self.len() < CAP`
