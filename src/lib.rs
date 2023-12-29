@@ -31,11 +31,12 @@ use std::{
 };
 
 pub use self::{
+    entry::VacantEntry,
     error::BufferFullError,
     iter::{Iter, IterMut},
 };
 
-use self::{entry::VacantEntry, pos::Pos};
+use self::pos::Pos;
 
 /// Very simple ring buffer that can hold up to `CAP` items of type `A`.
 #[derive(Clone, Copy)]
