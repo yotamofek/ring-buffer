@@ -13,9 +13,7 @@ jobs:
         with:
           toolchain: nightly-2023-12-26
           components: miri,rust-src
-      - uses: dtolnay/install@master
-        with:
-          crate: cargo-careful
+      - run: cargo install cargo-careful
       - run: cargo miri test --all-features
       - run: cargo careful test --all-features
       - run: cargo doc --no-deps --all-features
