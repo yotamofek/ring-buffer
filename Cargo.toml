@@ -7,7 +7,5 @@ edition = "2021"
 name = "iter"
 harness = false
 
-[dependencies]
-
 [dev-dependencies]
 criterion = "0.5.1"
