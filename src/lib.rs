@@ -1,6 +1,7 @@
 #![allow(incomplete_features)]
 #![feature(
     allocator_api,
+    array_ptr_get,
     const_maybe_uninit_uninit_array,
     generic_const_exprs,
     iter_advance_by,

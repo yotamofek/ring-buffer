@@ -12,7 +12,7 @@ use crate::{Pos, RingBuffer};
 macro_rules! iter {
     {
         $(#[$attr:meta])*
-        $name:ident(*$raw_mut:tt T, {$( $mut_:tt )?}, $assume_init_ref:ident)
+        $name:ident(*$raw_mut:tt T, {$( $mut_:tt )?}, $as_slice:ident, $get_unchecked:ident)
     } => {
         $(#[$attr])*
         pub struct $name<'buf, A: Copy, const CAP: usize> {
@@ -30,12 +30,11 @@ macro_rules! iter {
                 }
             }
 
-            /// Returns a pointer to the item at the given index without doing bounds checks. Also assumes that the item is initialized.
+            /// Returns a pointer to the item at the given index without doing bounds checks.
             #[inline(always)]
-            fn get_unchecked(& $($mut_)? self, index: usize) -> *$raw_mut A {
+            unsafe fn get_unchecked(& $($mut_)? self, index: usize) -> *$raw_mut A {
                 let index = self.pos.logical_index(index);
-                let ptr = self.buf.cast::<A>();
-                ptr.wrapping_add(index)
+                self.buf.$as_slice().$get_unchecked(index).cast()
             }
         }
 
@@ -53,9 +52,12 @@ macro_rules! iter {
             type Item = &'buf $($mut_)? A;
 
             fn next(&mut self) -> Option<Self::Item> {
+                let new_len = self.pos.len().checked_sub(1)?;
                 // SAFETY: assuming `self.pos.len() < CAP`, then `self.pos.len() - 1 < CAP`
-                unsafe { self.pos.set_len(self.pos.len().checked_sub(1)?) };
-                let item = self.get_unchecked(0);
+                let item = unsafe {
+                    self.pos.set_len(new_len);
+                    self.get_unchecked(0)
+                };
                 self.pos.advance(1);
                 Some(unsafe { & $($mut_)? *item })
             }
@@ -95,10 +97,14 @@ macro_rules! iter {
 
         impl<A: Copy, const CAP: usize> DoubleEndedIterator for $name<'_, A, CAP> {
             fn next_back(&mut self) -> Option<Self::Item> {
+                let new_len = self.pos.len().checked_sub(1)?;
                 // SAFETY: assuming `self.pos.len() < CAP`, then `self.pos.len() - 1 < CAP`
-                unsafe { self.pos.set_len(self.pos.len().checked_sub(1)?) };
-                let item = self.get_unchecked(self.pos.len());
-                Some(unsafe { & $($mut_)? *item })
+                let item = unsafe {
+                    self.pos.set_len(new_len);
+                    let item = self.get_unchecked(new_len);
+                    & $($mut_)? *item
+                };
+                Some(item)
             }
 
             fn advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
@@ -109,7 +115,7 @@ macro_rules! iter {
                         Ok(())
                     }
                     None => {
-                        // `n > self.len`, because otherwise checked_sub
+                        // `n > self.pos.len()`, because otherwise checked_sub
                         // would have returned Some
                         let left = unsafe { NonZeroUsize::new_unchecked(n - self.pos.len()) };
                         self.pos.clear_len();
@@ -141,11 +147,11 @@ macro_rules! iter {
 
 iter! {
     /// An iterator over references to the items in a ring buffer.
-    Iter(*const T, {/* no mut */}, assume_init_ref)
+    Iter(*const T, {/* no mut */}, as_slice, get_unchecked)
 }
 iter! {
     /// An iterator over mutable references to the items in a ring buffer.
-    IterMut(*mut T, {mut}, assume_init_mut)
+    IterMut(*mut T, {mut}, as_mut_slice, get_unchecked_mut)
 }
 
 unsafe impl<'buf, A: Copy + Sync, const CAP: usize> Sync for Iter<'buf, A, CAP> {}
