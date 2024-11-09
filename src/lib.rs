@@ -2,17 +2,13 @@
 #![feature(
     allocator_api,
     array_ptr_get,
-    const_maybe_uninit_uninit_array,
     generic_const_exprs,
     iter_advance_by,
     maybe_uninit_array_assume_init,
     maybe_uninit_slice,
     maybe_uninit_uninit_array,
     min_specialization,
-    new_uninit,
     slice_ptr_get,
-    slice_ptr_len,
-    slice_split_at_unchecked,
     trusted_len,
     trusted_random_access
 )]

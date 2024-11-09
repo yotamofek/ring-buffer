@@ -154,11 +154,11 @@ iter! {
     IterMut(*mut T, {mut}, as_mut_slice, get_unchecked_mut)
 }
 
-unsafe impl<'buf, A: Copy + Sync, const CAP: usize> Sync for Iter<'buf, A, CAP> {}
-unsafe impl<'buf, A: Copy + Sync, const CAP: usize> Send for Iter<'buf, A, CAP> {}
+unsafe impl<A: Copy + Sync, const CAP: usize> Sync for Iter<'_, A, CAP> {}
+unsafe impl<A: Copy + Sync, const CAP: usize> Send for Iter<'_, A, CAP> {}
 
-unsafe impl<'buf, A: Copy + Sync, const CAP: usize> Sync for IterMut<'buf, A, CAP> {}
-unsafe impl<'buf, A: Copy + Send, const CAP: usize> Send for IterMut<'buf, A, CAP> {}
+unsafe impl<A: Copy + Sync, const CAP: usize> Sync for IterMut<'_, A, CAP> {}
+unsafe impl<A: Copy + Send, const CAP: usize> Send for IterMut<'_, A, CAP> {}
 
 #[cfg(test)]
 mod tests {
