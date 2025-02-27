@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-11-09
+          toolchain: nightly-2025-02-27
           components: miri,rust-src
       - run: cargo install cargo-careful
       - run: cargo miri test --all-features

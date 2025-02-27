@@ -2,11 +2,11 @@
 #![feature(
     allocator_api,
     array_ptr_get,
+    generic_arg_infer,
     generic_const_exprs,
     iter_advance_by,
     maybe_uninit_array_assume_init,
     maybe_uninit_slice,
-    maybe_uninit_uninit_array,
     min_specialization,
     slice_ptr_get,
     trusted_len,
@@ -54,7 +54,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// Creates a new empty ring buffer.
     pub const fn new() -> Self {
         Self {
-            buf: MaybeUninit::uninit_array(),
+            buf: [const { MaybeUninit::uninit() }; _],
             pos: Pos::zero(),
         }
     }
@@ -406,7 +406,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         debug_assert!(self.pos.is_contiguous());
         let at = self.pos.at();
         let len = self.len();
-        MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(at..at + len))
+        self.buf.get_unchecked(at..at + len).assume_init_ref()
     }
 
     /// Returns a mutable slice containing the contents of the ring buffer, assuming ring buffer is layed out contiguously in memory.
@@ -419,7 +419,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         debug_assert!(self.pos.is_contiguous());
         let at = self.pos.at();
         let len = self.len();
-        MaybeUninit::slice_assume_init_mut(self.buf.get_unchecked_mut(at..at + len))
+        self.buf.get_unchecked_mut(at..at + len).assume_init_mut()
     }
 
     /// Returns a slice reference containing the contents of the ring buffer, if the ring buffer is layed out contiguously in memory.
@@ -488,7 +488,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     pub fn front_slice(&self) -> &[A] {
         let at = self.pos.at();
         let len = self.pos.front_len();
-        unsafe { MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(at..at + len)) }
+        unsafe { self.buf.get_unchecked(at..at + len).assume_init_ref() }
     }
 
     /// Returns a mutable slice reference containing the front part of the ring buffer.
@@ -517,7 +517,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// ```
     pub fn back_slice(&self) -> &[A] {
         let len = self.pos.back_len();
-        unsafe { MaybeUninit::slice_assume_init_ref(self.buf.get_unchecked(..len)) }
+        unsafe { self.buf.get_unchecked(..len).assume_init_ref() }
     }
 
     /// Returns a mutable slice reference containing the back part of the ring buffer.
@@ -561,10 +561,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         let front_len = self.pos.front_len();
         let back_len = self.pos.back_len();
         let (back, front) = unsafe { self.buf.split_at_mut_unchecked(self.pos.at()) };
-        let front =
-            unsafe { MaybeUninit::slice_assume_init_mut(front.get_unchecked_mut(..front_len)) };
-        let back =
-            unsafe { MaybeUninit::slice_assume_init_mut(back.get_unchecked_mut(..back_len)) };
+        let front = unsafe { front.get_unchecked_mut(..front_len).assume_init_mut() };
+        let back = unsafe { back.get_unchecked_mut(..back_len).assume_init_mut() };
         (front, back)
     }
 
@@ -583,7 +581,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
             return None;
         }
 
-        let mut arr = MaybeUninit::uninit_array();
+        let mut arr = [const { MaybeUninit::uninit() }; _];
         // SAFETY: `self.len == CAP` and `arr` is of length `CAP`
         unsafe { self.copy_into(&mut arr) };
 
@@ -634,7 +632,7 @@ where
     [(); CAP - N]:,
 {
     fn from(arr: [A; N]) -> Self {
-        let mut buf = MaybeUninit::uninit_array();
+        let mut buf = [const { MaybeUninit::uninit() }; _];
         unsafe {
             ptr::copy_nonoverlapping(arr.as_ptr().cast::<MaybeUninit<A>>(), buf.as_mut_ptr(), N)
         };
