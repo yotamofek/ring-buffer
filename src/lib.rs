@@ -104,7 +104,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     #[inline(always)]
     unsafe fn first_item(&mut self) -> &mut MaybeUninit<A> {
         debug_assert!(CAP > 0);
-        self.buf.get_unchecked_mut(self.pos.at())
+        unsafe { self.buf.get_unchecked_mut(self.pos.at()) }
     }
 
     /// Returns a reference to the item past the last item, where the next item would be written.
@@ -116,7 +116,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     unsafe fn next_item(&mut self) -> &mut MaybeUninit<A> {
         debug_assert!(CAP > 0);
         let index = self.pos.logical_index(self.len());
-        self.buf.get_unchecked_mut(index)
+        unsafe { self.buf.get_unchecked_mut(index) }
     }
 
     /// Returns a reference to the item at the given index without doing bounds checks. Also assumes that the item is initialized.
@@ -127,7 +127,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     pub unsafe fn get_unchecked(&self, index: usize) -> &A {
         debug_assert!(index < self.len());
         let index = self.pos.logical_index(index);
-        self.buf.get_unchecked(index).assume_init_ref()
+        unsafe { self.buf.get_unchecked(index).assume_init_ref() }
     }
 
     /// Returns a mutable reference to the item at the given index without doing bounds checks. Also assumes that the item is initialized.
@@ -138,7 +138,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     pub unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut A {
         debug_assert!(index < self.len());
         let index = self.pos.logical_index(index);
-        self.buf.get_unchecked_mut(index).assume_init_mut()
+        unsafe { self.buf.get_unchecked_mut(index).assume_init_mut() }
     }
 
     /// Returns a reference to the item at the given index, or `None` if the index is out of bounds.
@@ -319,8 +319,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     #[inline]
     pub unsafe fn push_unchecked(&mut self, item: A) {
         debug_assert!(self.has_remaining());
-        self.next_item().write(item);
-        self.pos.set_len(self.len() + 1);
+        unsafe { self.next_item() }.write(item);
+        unsafe { self.pos.set_len(self.len() + 1) };
     }
 
     /// Tries to add an item to the end of the ring buffer, if the buffer [has remaining capacity](Self::has_remaining).
@@ -395,12 +395,21 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         debug_assert!(dst.len() >= self.len());
         let front = self.front_slice();
         let back = self.back_slice();
+        let dst = dst.as_mut_ptr();
 
-        dst.as_mut_ptr()
-            .copy_from_nonoverlapping(front.as_ptr().cast(), front.len());
-        dst.as_mut_ptr()
-            .add(front.len())
-            .copy_from_nonoverlapping(back.as_ptr().cast(), back.len());
+        // copy front
+        {
+            let ptr = front.as_ptr().cast();
+            let len = front.len();
+            unsafe { dst.copy_from_nonoverlapping(ptr, len) };
+        }
+
+        // copy back
+        {
+            let ptr = back.as_ptr().cast();
+            let len = back.len();
+            unsafe { dst.add(front.len()).copy_from_nonoverlapping(ptr, len) };
+        }
     }
 
     /// Returns a slice containing the contents of the ring buffer, assuming ring buffer is layed out contiguously in memory.
@@ -413,7 +422,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         debug_assert!(self.pos.is_contiguous());
         let at = self.pos.at();
         let len = self.len();
-        self.buf.get_unchecked(at..at + len).assume_init_ref()
+        let index = at..at + len;
+        unsafe { self.buf.get_unchecked(index).assume_init_ref() }
     }
 
     /// Returns a mutable slice containing the contents of the ring buffer, assuming ring buffer is layed out contiguously in memory.
@@ -426,7 +436,8 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
         debug_assert!(self.pos.is_contiguous());
         let at = self.pos.at();
         let len = self.len();
-        self.buf.get_unchecked_mut(at..at + len).assume_init_mut()
+        let index = at..at + len;
+        unsafe { self.buf.get_unchecked_mut(index).assume_init_mut() }
     }
 
     /// Returns a slice reference containing the contents of the ring buffer, if the ring buffer is layed out contiguously in memory.

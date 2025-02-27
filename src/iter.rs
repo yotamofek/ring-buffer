@@ -34,7 +34,8 @@ macro_rules! iter {
             #[inline(always)]
             unsafe fn get_unchecked(& $($mut_)? self, index: usize) -> *$raw_mut A {
                 let index = self.pos.logical_index(index);
-                self.buf.$as_slice().$get_unchecked(index).cast()
+                let slice = self.buf.$as_slice();
+                unsafe { slice.$get_unchecked(index) }.cast()
             }
         }
 
@@ -91,7 +92,7 @@ macro_rules! iter {
             where
                 Self: TrustedRandomAccessNoCoerce,
             {
-                & $($mut_)? *self.get_unchecked(idx)
+                unsafe { & $($mut_)? *self.get_unchecked(idx) }
             }
         }
 
