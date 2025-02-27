@@ -145,6 +145,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let buf = RingBuffer::<_, 3>::from([0, 1]);
     /// assert_eq!(buf.get(0), Some(&0));
@@ -163,6 +164,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([1, 2]);
     /// *buf.get_mut(0).unwrap() *= 2;
@@ -215,6 +217,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([1, 2]);
     /// buf.with_vacancy().unwrap().write(3);
@@ -280,6 +283,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([0, 1]);
     /// let mut call_count = 0;
@@ -324,6 +328,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([1, 2]);
     /// assert_eq!(buf.try_push(3), Ok(()));
@@ -342,6 +347,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::new();
     /// buf.push(0);
@@ -353,6 +359,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     /// ```
     ///
     /// ```should_panic
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([0, 1, 2]);
     /// buf.push(3);
@@ -426,6 +433,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([0, 1]);
     /// assert_eq!(buf.as_slice(), Some(&[0, 1][..]));
@@ -450,6 +458,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([0, 1]);
     /// buf.as_slice_mut().unwrap().copy_from_slice(&[2, 3]);
@@ -475,6 +484,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([0, 1, 2]);
     /// assert_eq!(buf.front_slice(), &[0, 1, 2][..]);
@@ -508,6 +518,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// let mut buf = RingBuffer::<_, 3>::from([0, 1, 2]);
     /// assert_eq!(buf.back_slice(), &[][..]);
@@ -571,6 +582,7 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
     ///
     /// # Examples
     /// ```
+    /// # #![feature(generic_const_exprs)]
     /// # use ring_buffer::RingBuffer;
     /// assert_eq!(RingBuffer::<_, 3>::from([0, 1, 2]).to_array(), Some([0, 1, 2]));
     /// assert_eq!(RingBuffer::<_, 3>::from([0, 1]).to_array(), None);
@@ -618,12 +630,14 @@ impl<A: Copy, const CAP: usize> RingBuffer<A, CAP> {
 /// # Examples
 ///
 /// ```rust
+/// # #![feature(generic_const_exprs)]
 /// # use ring_buffer::RingBuffer;
 /// assert!(RingBuffer::<_, 3>::from([0, 1, 2]).iter().eq(&[0, 1, 2]));
 /// assert!(RingBuffer::<_, 3>::from([0, 1]).iter().eq(&[0, 1]));
 /// ```
 ///
 /// ```compile_fail
+/// # #![feature(generic_const_exprs)]
 /// # use ring_buffer::RingBuffer;
 /// RingBuffer::<_, 3>::from([0, 1, 2, 3]);
 /// ```
